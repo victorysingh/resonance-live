@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Resonance Live</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: radial-gradient(circle at top, #0b1220, #020617);
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.6s ease;
+    }
+
+    body.calm {
+      background: radial-gradient(circle at top, #020617, #000);
+    }
+
+    .card {
+      background: linear-gradient(180deg, #0b1220, #020617);
+      padding: 28px;
+      border-radius: 18px;
+      width: 620px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.05);
+      transition: all 0.5s ease;
+    }
+
+    body.calm .card {
+      background: linear-gradient(180deg, #020617, #000);
+      box-shadow: 0 10px 40px rgba(59,130,246,0.15);
+    }
+
+    h2 { margin-bottom: 6px; }
+    h1 { margin: 8px 0 6px; font-size: 34px; }
+
+    .green { color: #22c55e; }
+    .yellow { color: #facc15; }
+    .red { color: #ef4444; }
+    .muted { color: #94a3b8; }
+
+    .label { margin-top: 10px; font-size: 15px; }
+
+    canvas { margin: 14px 0; }
+
+    .risk-bar {
+      background: #0f172a;
+      border-radius: 999px;
+      overflow: hidden;
+      height: 12px;
+      margin: 8px 0 12px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .risk-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #22c55e, #facc15, #ef4444);
+      transition: width 0.5s ease;
+    }
+
+    .section {
+      margin-top: 16px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+
+    input[type=range] {
+      width: 100%;
+      margin-top: 6px;
+    }
+
+    button {
+      margin-top: 12px;
+      padding: 10px 16px;
+      border-radius: 10px;
+      border: none;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .connected {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 13px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>🎙️ Resonance Live</h2>
+
+    <h1 id="load">Cognitive Load: -</h1>
+    <h3 id="status">Status: -</h3>
+
+    <div class="label">Consultation Type: <b id="mode">-</b></div>
+    <div class="label">Speech Rate: <b id="rate">-</b></div>
+    <div class="label">AI Intervention: <b id="action">-</b></div>
+    <div class="label">Reason: <span id="reason">-</span></div>
+    <div class="label">Suggestion: <span id="suggestion">-</span></div>
+    <div class="label">Recovery Buffer: <b id="breakBuffer">-</b></div>
+
+    <canvas id="loadChart" height="140"></canvas>
+
+    <div class="label">Burnout Risk: <b><span id="riskValue">0%</span></b></div>
+    <div class="risk-bar">
+      <div class="risk-fill" id="riskFill"></div>
+    </div>
+
+    <div class="section">
+      🎬 <b>Session Replay</b>
+      <input type="range" id="replaySlider" min="0" max="0" value="0" oninput="replayAt(this.value)">
+      <div class="muted" style="font-size:13px;">Scrub timeline to replay past states</div>
+    </div>
+
+    <div class="section">
+      <button onclick="exportReport()">⬇️ Export Session Report</button>
+    </div>
+
+    <div class="connected">
+      <span id="connected">Connecting...</span><br/>
+      <span id="lastUpdate">Last update: -</span>
+    </div>
+  </div>
+
+  <script>
+    let ws;
+    let history = [];
+    let payloadHistory = [];
+
+    const ctx = document.getElementById("loadChart").getContext("2d");
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Cognitive Load',
+          data: [],
+          borderColor: '#38bdf8',
+          backgroundColor: 'rgba(56,189,248,0.15)',
+          tension: 0.4,
+          fill: true,
+          pointRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: { y: { min: 0, max: 10 } }
+      }
+    });
+
+    function updateUI(data) {
+      document.getElementById("load").innerText = "Cognitive Load: " + data.cognitive_load;
+      document.getElementById("mode").innerText = data.interaction_mode;
+      document.getElementById("rate").innerText = data.speech_rate;
+      document.getElementById("action").innerText = data.agent_action;
+      document.getElementById("reason").innerText = data.intervention_reason || "—";
+      document.getElementById("suggestion").innerText = data.suggestion || "—";
+
+      const statusEl = document.getElementById("status");
+      statusEl.innerText = "Status: " + data.status;
+      statusEl.className = data.status === "RED" ? "red" : data.status === "YELLOW" ? "yellow" : "green";
+
+      history.push(data.cognitive_load);
+      if (history.length > 10) history.shift();
+
+      chart.data.labels = history.map((_, i) => i + 1);
+      chart.data.datasets[0].data = history;
+      chart.update();
+
+      let score = 0;
+      for (let i = 0; i < history.length; i++) {
+        const w = (i + 1) / history.length;
+        score += history[i] * w;
+      }
+
+      const normalized = Math.min(100, Math.round((score / history.length) * 8));
+      document.getElementById("riskValue").innerText = normalized + "%";
+      document.getElementById("riskFill").style.width = normalized + "%";
+
+      if (data.ui_mode === "CALM") document.body.classList.add("calm");
+      else document.body.classList.remove("calm");
+
+      document.getElementById("breakBuffer").innerText =
+        data.auto_break_minutes ? data.auto_break_minutes + " min added" : "—";
+
+      document.getElementById("lastUpdate").innerText =
+        "Last update: " + new Date().toLocaleTimeString();
+    }
+
+    function replayAt(i) {
+      const d = payloadHistory[i];
+      if (d) updateUI(d);
+    }
+
+    function exportReport() {
+      const blob = new Blob([JSON.stringify(payloadHistory, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "session_report.json";
+      a.click();
+    }
+
+    function connect() {
+      ws = new WebSocket("ws://127.0.0.1:8000/ws");
+      ws.onopen = () => document.getElementById("connected").innerText = "Connected";
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        payloadHistory.push(data);
+        document.getElementById("replaySlider").max = payloadHistory.length - 1;
+        updateUI(data);
+      };
+      ws.onclose = () => {
+        document.getElementById("connected").innerText = "Disconnected – reconnecting...";
+        setTimeout(connect, 2000);
+      };
+    }
+
+    connect();
+  </script>
+
+</body>
+</html>
